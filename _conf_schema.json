@@ -1,0 +1,46 @@
+{
+  "tshock_host": {
+    "description": "TShock REST API 地址（含端口，如 http://1.2.3.4:7878）",
+    "type": "string",
+    "default": ""
+  },
+  "tshock_username": {
+    "description": "TShock REST API 用户名",
+    "type": "string",
+    "default": ""
+  },
+  "tshock_password": {
+    "description": "TShock REST API 密码",
+    "type": "string",
+    "default": ""
+  },
+  "session_ids": {
+    "description": "推送目标群的 session ID 列表（使用 /sid 获取，格式如 aiocqhttp:GroupMessage:1021285757）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  },
+  "group_ids": {
+    "description": "允许使用指令的群 ID 列表（纯数字）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  },
+  "admin_ids": {
+    "description": "允许执行 tc 命令的管理员 ID 列表（用户的 QQ 号或平台 ID）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  },
+  "poll_interval": {
+    "description": "轮询间隔（秒）",
+    "type": "int",
+    "default": 15
+  }
+}

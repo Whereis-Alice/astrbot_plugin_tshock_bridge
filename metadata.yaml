@@ -1,0 +1,7 @@
+name: astrbot_plugin_terraria
+display_name: "Terraria 服务器监控"
+desc: Terraria TShock 服务器监控，支持玩家上下线通知、在线查询与远程指令执行
+version: 0.1.0
+author: Reisenbug
+astrbot_version: ">=4.16.0"
+repo: ""
