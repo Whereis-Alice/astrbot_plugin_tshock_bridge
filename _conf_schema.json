@@ -38,6 +38,11 @@
     },
     "default": []
   },
+  "notify_join_leave": {
+    "description": "是否推送玩家上下线通知",
+    "type": "bool",
+    "default": true
+  },
   "poll_interval": {
     "description": "轮询间隔（秒）",
     "type": "int",

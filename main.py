@@ -104,6 +104,10 @@ class Main(Star):
         joined = current_players - self.last_players
         left = self.last_players - current_players
 
+        if not self.config.get("notify_join_leave", True):
+            self.last_players = current_players
+            return
+
         for name in joined:
             count = len(current_players)
             names = "、".join(sorted(current_players))
