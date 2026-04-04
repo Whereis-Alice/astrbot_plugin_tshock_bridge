@@ -1,4 +1,4 @@
-name: astrbot_plugin_terraria
+name: astrbot_plugin_terraria_server_manager
 display_name: "Terraria 服务器监控"
 desc: Terraria TShock 服务器监控，支持玩家上下线通知、在线查询与远程指令执行
 version: 0.1.0
