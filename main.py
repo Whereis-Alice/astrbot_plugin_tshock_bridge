@@ -1,8 +1,9 @@
 import asyncio
+
 import aiohttp
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
 
@@ -41,7 +42,9 @@ class Main(Star):
             return False
         url = f"{host}/token/create"
         try:
-            async with self._session.get(url, params={"username": username, "password": password}) as resp:
+            async with self._session.get(
+                url, params={"username": username, "password": password}
+            ) as resp:
                 data = await resp.json(content_type=None)
                 if str(data.get("status")) == "200":
                     self._token = data["token"]
@@ -57,7 +60,9 @@ class Main(Star):
         host = self.config.get("tshock_host", "")
         url = f"{host}/v2/server/status"
         try:
-            async with self._session.get(url, params={"token": self._token, "players": "true"}) as resp:
+            async with self._session.get(
+                url, params={"token": self._token, "players": "true"}
+            ) as resp:
                 data = await resp.json(content_type=None)
                 if str(data.get("status")) == "403":
                     self._token = None
@@ -71,7 +76,9 @@ class Main(Star):
         host = self.config.get("tshock_host", "")
         url = f"{host}/v3/server/rawcmd"
         try:
-            async with self._session.get(url, params={"token": self._token, "cmd": cmd}) as resp:
+            async with self._session.get(
+                url, params={"token": self._token, "cmd": cmd}
+            ) as resp:
                 return await resp.json(content_type=None)
         except Exception as e:
             logger.error(f"[Terraria] 命令请求异常: {e}")
@@ -81,7 +88,9 @@ class Main(Star):
         session_ids = self.config.get("session_ids", [])
         for session_id in session_ids:
             try:
-                await self.context.send_message(session_id, MessageChain().message(message))
+                await self.context.send_message(
+                    session_id, MessageChain().message(message)
+                )
             except Exception as e:
                 logger.error(f"[Terraria] 推送到 {session_id} 失败: {e}")
 
@@ -111,7 +120,9 @@ class Main(Star):
         for name in joined:
             count = len(current_players)
             names = "、".join(sorted(current_players))
-            await self._send_to_groups(f"🟢 {name} 加入了服务器。\n在线: {count} 人\n{names}")
+            await self._send_to_groups(
+                f"🟢 {name} 加入了服务器。\n在线: {count} 人\n{names}"
+            )
 
         for name in left:
             count = len(current_players)
@@ -144,7 +155,9 @@ class Main(Star):
             players = [p.get("nickname", "").strip() for p in status.get("players", [])]
             players = [n for n in players if n]
             count = len(players)
-            msg = f"👥 在线: {count} 人\n{'、'.join(players) if players else '暂无玩家'}"
+            msg = (
+                f"👥 在线: {count} 人\n{'、'.join(players) if players else '暂无玩家'}"
+            )
         else:
             msg = "⚠️ 无法获取服务器状态"
         yield event.plain_result(msg)
