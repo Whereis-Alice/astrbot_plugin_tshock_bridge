@@ -60,7 +60,7 @@ class Main(Star):
                 data = await resp.json(content_type=None)
                 if str(data.get("status")) == "200":
                     self._token = data["token"]
-                    logger.info(f"[Terraria] Token 获取成功: {self._token[:8]}...")
+                    logger.info("[Terraria] Token 获取成功")
                     return True
                 logger.error(f"[Terraria] Token 获取失败: {data}")
                 return False
@@ -91,7 +91,11 @@ class Main(Star):
             async with self._session.get(
                 url, params={"token": self._token, "cmd": cmd}
             ) as resp:
-                return await resp.json(content_type=None)
+                data = await resp.json(content_type=None)
+                if str(data.get("status")) == "403":
+                    self._token = None
+                    return None
+                return data
         except Exception as e:
             logger.error(f"[Terraria] 命令请求异常: {e}")
             return None
@@ -184,16 +188,21 @@ class Main(Star):
         yield event.plain_result(msg)
 
     @filter.command("tc")
-    async def cmd_exec(self, event: AstrMessageEvent, cmd: str):
+    async def cmd_exec(self, event: AstrMessageEvent, cmd: str = ""):
         if not self._allowed(event):
             return
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 你没有权限执行此命令")
             return
+        if not cmd.strip():
+            yield event.plain_result("⚠️ 用法: /tc <命令>")
+            return
         if not await self._ensure_token():
             yield event.plain_result("⚠️ 无法连接服务器")
             return
         result = await self._exec_command(f"/{cmd}")
+        if not result and await self._ensure_token():
+            result = await self._exec_command(f"/{cmd}")
         if result:
             response_text = "\n".join(result.get("response", ["执行完成"]))
             yield event.plain_result(f"📋 执行结果:\n{response_text}")
