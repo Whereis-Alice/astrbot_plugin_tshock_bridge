@@ -7,18 +7,22 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
 
+_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
 
 class Main(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self.last_players: set = set()
+        self._first_poll = True
         self._monitor_task = None
         self._token: str | None = None
         self._session: aiohttp.ClientSession | None = None
+        self._token_lock = asyncio.Lock()
 
     async def initialize(self):
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
         await self._refresh_token()
         self._monitor_task = asyncio.create_task(self._monitor_loop())
         logger.info("[Terraria] 监控任务已启动")
@@ -32,6 +36,14 @@ class Main(Star):
         if not admin_ids:
             return False
         return event.get_sender_id() in admin_ids
+
+    async def _ensure_token(self) -> bool:
+        if self._token:
+            return True
+        async with self._token_lock:
+            if self._token:
+                return True
+            return await self._refresh_token()
 
     async def _refresh_token(self) -> bool:
         host = self.config.get("tshock_host", "")
@@ -94,21 +106,30 @@ class Main(Star):
             except Exception as e:
                 logger.error(f"[Terraria] 推送到 {session_id} 失败: {e}")
 
+    def _parse_players(self, status: dict) -> set[str]:
+        players = status.get("players")
+        if not isinstance(players, list):
+            return set()
+        return {
+            p.get("nickname", "").strip()
+            for p in players
+            if isinstance(p, dict) and p.get("nickname", "").strip()
+        }
+
     async def _poll(self):
-        if not self._token:
-            ok = await self._refresh_token()
-            if not ok:
-                return
+        if not await self._ensure_token():
+            return
 
         status = await self._get_status()
         if not status or str(status.get("status")) != "200":
             return
 
-        current_players = {
-            p.get("nickname", "").strip()
-            for p in status.get("players", [])
-            if p.get("nickname", "").strip()
-        }
+        current_players = self._parse_players(status)
+
+        if self._first_poll:
+            self.last_players = current_players
+            self._first_poll = False
+            return
 
         joined = current_players - self.last_players
         left = self.last_players - current_players
@@ -148,12 +169,12 @@ class Main(Star):
     async def cmd_status(self, event: AstrMessageEvent):
         if not self._allowed(event):
             return
-        if not self._token:
-            await self._refresh_token()
+        if not await self._ensure_token():
+            yield event.plain_result("⚠️ 无法连接服务器")
+            return
         status = await self._get_status()
         if status and str(status.get("status")) == "200":
-            players = [p.get("nickname", "").strip() for p in status.get("players", [])]
-            players = [n for n in players if n]
+            players = sorted(self._parse_players(status))
             count = len(players)
             msg = (
                 f"👥 在线: {count} 人\n{'、'.join(players) if players else '暂无玩家'}"
@@ -169,8 +190,9 @@ class Main(Star):
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 你没有权限执行此命令")
             return
-        if not self._token:
-            await self._refresh_token()
+        if not await self._ensure_token():
+            yield event.plain_result("⚠️ 无法连接服务器")
+            return
         result = await self._exec_command(f"/{cmd}")
         if result:
             response_text = "\n".join(result.get("response", ["执行完成"]))
@@ -181,6 +203,10 @@ class Main(Star):
     async def destroy(self):
         if self._monitor_task:
             self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
         if self._session:
             await self._session.close()
         logger.info("[Terraria] 已停止")
