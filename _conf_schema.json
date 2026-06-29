@@ -1,21 +1,33 @@
 {
   "tshock_host": {
-    "description": "TShock REST API 地址（含端口，如 http://1.2.3.4:7878）",
+    "description": "TShock REST API 地址，包含端口，例如 http://1.2.3.4:7878",
     "type": "string",
     "default": ""
   },
   "tshock_username": {
-    "description": "TShock REST API 用户名",
+    "description": "TShock REST API 用户名。未填写静态 token 时使用。",
     "type": "string",
     "default": ""
   },
   "tshock_password": {
-    "description": "TShock REST API 密码",
+    "description": "TShock REST API 密码。未填写静态 token 时使用。",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "tshock_token": {
+    "description": "可选。手动填写现成的 TShock token，填写后优先使用，不再依赖 token/create 登录。",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "tshock_token_endpoint": {
+    "description": "可选。自定义 token 获取接口路径，例如 /token/create 或 /v2/token/create。留空时会自动依次尝试这两个端点。",
     "type": "string",
     "default": ""
   },
   "session_ids": {
-    "description": "推送目标群的 session ID 列表（使用 /sid 获取，格式如 aiocqhttp:GroupMessage:1021285757）",
+    "description": "需要推送通知的 session ID 列表，可通过 /sid 获取，例如 default:GroupMessage:1021285757",
     "type": "list",
     "items": {
       "type": "string"
@@ -23,7 +35,7 @@
     "default": []
   },
   "group_ids": {
-    "description": "允许使用指令的群 ID 列表（纯数字）",
+    "description": "允许使用插件命令的群 ID 列表，只填数字字符串。",
     "type": "list",
     "items": {
       "type": "string"
@@ -31,7 +43,7 @@
     "default": []
   },
   "admin_ids": {
-    "description": "允许执行 tc 命令的管理员 ID 列表（用户的 QQ 号或平台 ID）",
+    "description": "允许执行 /tc 命令的管理员 ID 列表，填写平台用户 ID，例如 QQ 号。",
     "type": "list",
     "items": {
       "type": "string"
@@ -39,13 +51,13 @@
     "default": []
   },
   "notify_join_leave": {
-    "description": "是否推送玩家上下线通知",
+    "description": "是否推送玩家上下线通知。",
     "type": "bool",
     "default": true
   },
   "poll_interval": {
-    "description": "轮询间隔（秒）",
+    "description": "轮询间隔，单位秒，最低会按 5 秒处理。",
     "type": "int",
-    "default": 15
+    "default": 30
   }
 }

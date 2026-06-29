@@ -1,4 +1,6 @@
 import asyncio
+import json
+from typing import Any
 
 import aiohttp
 
@@ -8,124 +10,267 @@ from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
 
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
+_DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
+_UNAUTHORIZED_STATUSES = {"401", "403"}
 
 
 class Main(Star):
+    """Fork-friendly TShock bridge based on Reisenbug's Terraria manager plugin."""
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.last_players: set = set()
+        self.last_players: set[str] = set()
         self._first_poll = True
-        self._monitor_task = None
+        self._monitor_task: asyncio.Task | None = None
         self._token: str | None = None
         self._session: aiohttp.ClientSession | None = None
         self._token_lock = asyncio.Lock()
+        self._configured_static_token: str | None = None
+        self._static_token_rejected = False
 
     async def initialize(self):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
-        await self._refresh_token()
+        self._sync_static_token_state()
+        if self._configured_static_token:
+            self._token = self._configured_static_token
+            logger.info("[TShock Bridge] Using configured static token.")
+        else:
+            await self._refresh_token()
         self._monitor_task = asyncio.create_task(self._monitor_loop())
-        logger.info("[Terraria] 监控任务已启动")
+        logger.info("[TShock Bridge] Monitor task started.")
+
+    def _clean_text(self, value: Any) -> str:
+        return str(value).strip() if value is not None else ""
+
+    def _normalize_host(self) -> str:
+        return self._clean_text(self.config.get("tshock_host", "")).rstrip("/")
+
+    def _build_url(self, path: str) -> str:
+        host = self._normalize_host()
+        if not host:
+            return ""
+        normalized_path = self._clean_text(path)
+        if normalized_path.startswith(("http://", "https://")):
+            return normalized_path
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        return f"{host}{normalized_path}"
+
+    def _string_id_set(self, key: str) -> set[str]:
+        raw_ids = self.config.get(key, [])
+        if not isinstance(raw_ids, list):
+            return set()
+        return {self._clean_text(item) for item in raw_ids if self._clean_text(item)}
+
+    def _token_endpoint_candidates(self) -> list[str]:
+        custom = self._clean_text(self.config.get("tshock_token_endpoint", ""))
+        candidates: list[str] = []
+        if custom:
+            candidates.append(custom)
+        candidates.extend(_DEFAULT_TOKEN_ENDPOINTS)
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = candidate.strip()
+            if normalized and normalized not in seen:
+                unique.append(normalized)
+                seen.add(normalized)
+        return unique
+
+    def _sync_static_token_state(self):
+        configured = self._clean_text(self.config.get("tshock_token", "")) or None
+        previous = self._configured_static_token
+        if configured == self._configured_static_token:
+            return
+        self._configured_static_token = configured
+        self._static_token_rejected = False
+        if configured:
+            self._token = configured
+        elif previous and self._token == previous:
+            self._token = None
+
+    def _poll_interval(self) -> int:
+        raw_interval = self.config.get("poll_interval", 30)
+        try:
+            interval = int(raw_interval)
+        except (TypeError, ValueError):
+            interval = 30
+        return max(5, interval)
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
-        group_ids = self.config.get("group_ids", [])
-        return event.get_group_id() in group_ids
+        return self._clean_text(event.get_group_id()) in self._string_id_set("group_ids")
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
-        admin_ids = self.config.get("admin_ids", [])
+        admin_ids = self._string_id_set("admin_ids")
         if not admin_ids:
             return False
-        return event.get_sender_id() in admin_ids
+        return self._clean_text(event.get_sender_id()) in admin_ids
+
+    async def _request_json(
+        self, url: str, params: dict[str, str] | None = None
+    ) -> tuple[int | None, dict[str, Any] | None]:
+        if not self._session:
+            return None, None
+        try:
+            async with self._session.get(url, params=params) as resp:
+                text = await resp.text()
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    logger.error(
+                        "[TShock Bridge] Non-JSON response from %s: %s",
+                        url,
+                        text[:200],
+                    )
+                    return resp.status, None
+                return resp.status, data
+        except Exception as exc:
+            logger.error("[TShock Bridge] Request failed for %s: %s", url, exc)
+            return None, None
+
+    def _invalidate_token(self, source: str):
+        if self._configured_static_token and self._token == self._configured_static_token:
+            self._static_token_rejected = True
+            logger.error(
+                "[TShock Bridge] The configured static token was rejected by %s. "
+                "Please update tshock_token.",
+                source,
+            )
+        elif self._token:
+            logger.warning(
+                "[TShock Bridge] Token was rejected by %s. The plugin will re-login on the next request.",
+                source,
+            )
+        self._token = None
 
     async def _ensure_token(self) -> bool:
+        self._sync_static_token_state()
         if self._token:
             return True
+
+        if self._configured_static_token:
+            if self._static_token_rejected:
+                return False
+            self._token = self._configured_static_token
+            return True
+
         async with self._token_lock:
             if self._token:
                 return True
             return await self._refresh_token()
 
     async def _refresh_token(self) -> bool:
-        host = self.config.get("tshock_host", "")
-        username = self.config.get("tshock_username", "")
-        password = self.config.get("tshock_password", "")
-        if not host or not username or not password:
-            logger.warning("[Terraria] TShock 连接信息未配置")
+        host = self._normalize_host()
+        username = self._clean_text(self.config.get("tshock_username", ""))
+        password = self._clean_text(self.config.get("tshock_password", ""))
+        if not host:
+            logger.warning("[TShock Bridge] tshock_host is not configured.")
             return False
-        url = f"{host}/token/create"
-        try:
-            async with self._session.get(
-                url, params={"username": username, "password": password}
-            ) as resp:
-                data = await resp.json(content_type=None)
-                if str(data.get("status")) == "200":
-                    self._token = data["token"]
-                    logger.info("[Terraria] Token 获取成功")
-                    return True
-                logger.error(f"[Terraria] Token 获取失败: {data}")
-                return False
-        except Exception as e:
-            logger.error(f"[Terraria] Token 请求异常: {e}")
+        if not username or not password:
+            logger.warning(
+                "[TShock Bridge] TShock username/password is missing. "
+                "You can also fill tshock_token to bypass token login."
+            )
             return False
 
-    async def _get_status(self) -> dict | None:
-        host = self.config.get("tshock_host", "")
-        url = f"{host}/v2/server/status"
-        try:
-            async with self._session.get(
-                url, params={"token": self._token, "players": "true"}
-            ) as resp:
-                data = await resp.json(content_type=None)
-                if str(data.get("status")) == "403":
-                    self._token = None
-                    return None
-                return data
-        except Exception as e:
-            logger.error(f"[Terraria] 状态请求异常: {e}")
+        attempts: list[str] = []
+        for endpoint in self._token_endpoint_candidates():
+            url = self._build_url(endpoint)
+            status_code, data = await self._request_json(
+                url,
+                params={"username": username, "password": password},
+            )
+            if data and str(data.get("status")) == "200" and data.get("token"):
+                self._token = self._clean_text(data.get("token"))
+                logger.info("[TShock Bridge] Token fetched successfully via %s.", endpoint)
+                return True
+
+            attempts.append(
+                f"{endpoint} -> http={status_code}, body={data if data is not None else 'null'}"
+            )
+
+        logger.error(
+            "[TShock Bridge] Failed to fetch token. Tried: %s. "
+            "If your server keeps rejecting username/password, set tshock_token manually.",
+            " | ".join(attempts) if attempts else "no endpoint",
+        )
+        return False
+
+    async def _get_status(self) -> dict[str, Any] | None:
+        url = self._build_url("/v2/server/status")
+        status_code, data = await self._request_json(
+            url,
+            params={"token": self._token or "", "players": "true"},
+        )
+        if not data:
             return None
 
-    async def _exec_command(self, cmd: str) -> dict | None:
-        host = self.config.get("tshock_host", "")
-        url = f"{host}/v3/server/rawcmd"
-        try:
-            async with self._session.get(
-                url, params={"token": self._token, "cmd": cmd}
-            ) as resp:
-                data = await resp.json(content_type=None)
-                if str(data.get("status")) == "403":
-                    self._token = None
-                    return None
-                return data
-        except Exception as e:
-            logger.error(f"[Terraria] 命令请求异常: {e}")
+        api_status = self._clean_text(data.get("status"))
+        if status_code in (401, 403) or api_status in _UNAUTHORIZED_STATUSES:
+            self._invalidate_token("/v2/server/status")
             return None
+        return data
+
+    async def _exec_command(self, cmd: str) -> dict[str, Any] | None:
+        url = self._build_url("/v3/server/rawcmd")
+        status_code, data = await self._request_json(
+            url,
+            params={"token": self._token or "", "cmd": cmd},
+        )
+        if not data:
+            return None
+
+        api_status = self._clean_text(data.get("status"))
+        if status_code in (401, 403) or api_status in _UNAUTHORIZED_STATUSES:
+            self._invalidate_token("/v3/server/rawcmd")
+            return None
+        return data
 
     async def _send_to_groups(self, message: str):
         session_ids = self.config.get("session_ids", [])
+        if not isinstance(session_ids, list):
+            return
         for session_id in session_ids:
+            normalized = self._clean_text(session_id)
+            if not normalized:
+                continue
             try:
                 await self.context.send_message(
-                    session_id, MessageChain().message(message)
+                    normalized, MessageChain().message(message)
                 )
-            except Exception as e:
-                logger.error(f"[Terraria] 推送到 {session_id} 失败: {e}")
+            except Exception as exc:
+                logger.error("[TShock Bridge] Failed to push to %s: %s", normalized, exc)
 
-    def _parse_players(self, status: dict) -> set[str]:
+    def _parse_players(self, status: dict[str, Any]) -> set[str]:
         players = status.get("players")
         if not isinstance(players, list):
             return set()
-        return {
-            p.get("nickname", "").strip()
-            for p in players
-            if isinstance(p, dict) and p.get("nickname", "").strip()
-        }
+
+        normalized_players: set[str] = set()
+        for player in players:
+            if isinstance(player, dict):
+                name = self._clean_text(
+                    player.get("nickname") or player.get("name") or player.get("username")
+                )
+            else:
+                name = self._clean_text(player)
+            if name:
+                normalized_players.add(name)
+        return normalized_players
+
+    def _format_players(self, players: set[str]) -> str:
+        if not players:
+            return "暂无玩家"
+        return "、".join(sorted(players))
 
     async def _poll(self):
         if not await self._ensure_token():
             return
 
         status = await self._get_status()
-        if not status or str(status.get("status")) != "200":
+        if not status or self._clean_text(status.get("status")) != "200":
             return
 
         current_players = self._parse_players(status)
@@ -135,79 +280,97 @@ class Main(Star):
             self._first_poll = False
             return
 
-        joined = current_players - self.last_players
-        left = self.last_players - current_players
-
         if not self.config.get("notify_join_leave", True):
             self.last_players = current_players
             return
 
-        for name in joined:
-            count = len(current_players)
-            names = "、".join(sorted(current_players))
+        joined = current_players - self.last_players
+        left = self.last_players - current_players
+
+        for name in sorted(joined):
             await self._send_to_groups(
-                f"🟢 {name} 加入了服务器。\n在线: {count} 人\n{names}"
+                f"[上线] {name} 加入了服务器\n"
+                f"在线: {len(current_players)} 人\n"
+                f"{self._format_players(current_players)}"
             )
 
-        for name in left:
-            count = len(current_players)
-            if current_players:
-                names = "、".join(sorted(current_players))
-                msg = f"🔴 {name} 离开了服务器。\n在线: {count} 人\n{names}"
-            else:
-                msg = f"🔴 {name} 离开了服务器。\n在线: 0 人\n暂无玩家"
-            await self._send_to_groups(msg)
+        for name in sorted(left):
+            await self._send_to_groups(
+                f"[下线] {name} 离开了服务器\n"
+                f"在线: {len(current_players)} 人\n"
+                f"{self._format_players(current_players)}"
+            )
 
         self.last_players = current_players
 
     async def _monitor_loop(self):
-        poll_interval = self.config.get("poll_interval", 15)
         while True:
             try:
                 await self._poll()
-            except Exception as e:
-                logger.error(f"[Terraria] 轮询错误: {e}")
-            await asyncio.sleep(poll_interval)
+            except Exception as exc:
+                logger.error("[TShock Bridge] Poll loop error: %s", exc)
+            await asyncio.sleep(self._poll_interval())
 
     @filter.command("ss")
     async def cmd_status(self, event: AstrMessageEvent):
         if not self._allowed(event):
             return
+
         if not await self._ensure_token():
-            yield event.plain_result("⚠️ 无法连接服务器")
+            yield event.plain_result("无法连接到 TShock REST API。")
             return
+
         status = await self._get_status()
-        if status and str(status.get("status")) == "200":
-            players = sorted(self._parse_players(status))
-            count = len(players)
-            msg = (
-                f"👥 在线: {count} 人\n{'、'.join(players) if players else '暂无玩家'}"
-            )
-        else:
-            msg = "⚠️ 无法获取服务器状态"
-        yield event.plain_result(msg)
+        if not status or self._clean_text(status.get("status")) != "200":
+            yield event.plain_result("无法获取服务器状态。")
+            return
+
+        players = self._parse_players(status)
+        player_count = self._clean_text(status.get("playercount")) or str(len(players))
+        max_players = self._clean_text(status.get("maxplayers")) or "?"
+        world = self._clean_text(status.get("world")) or "未知世界"
+        server_version = self._clean_text(status.get("serverversion")) or "未知版本"
+        message = (
+            f"世界: {world}\n"
+            f"版本: {server_version}\n"
+            f"在线: {player_count}/{max_players}\n"
+            f"玩家: {self._format_players(players)}"
+        )
+        yield event.plain_result(message)
 
     @filter.command("tc")
     async def cmd_exec(self, event: AstrMessageEvent, cmd: str = ""):
         if not self._allowed(event):
             return
         if not self._is_admin(event):
-            yield event.plain_result("⚠️ 你没有权限执行此命令")
+            yield event.plain_result("你没有权限执行这个命令。")
             return
-        if not cmd.strip():
-            yield event.plain_result("⚠️ 用法: /tc <命令>")
+
+        normalized_cmd = cmd.strip()
+        if not normalized_cmd:
+            yield event.plain_result("用法: /tc <命令>")
             return
+
         if not await self._ensure_token():
-            yield event.plain_result("⚠️ 无法连接服务器")
+            yield event.plain_result("无法连接到 TShock REST API。")
             return
-        result = await self._exec_command(f"/{cmd}")
+
+        result = await self._exec_command(f"/{normalized_cmd}")
         if not result and await self._ensure_token():
-            result = await self._exec_command(f"/{cmd}")
-        if result:
-            response_text = "\n".join(result.get("response", ["执行完成"]))
-            yield event.plain_result(f"📋 执行结果:\n{response_text}")
+            result = await self._exec_command(f"/{normalized_cmd}")
+
+        if not result:
+            yield event.plain_result("命令执行失败。")
+            return
+
+        response = result.get("response", [])
+        if isinstance(response, list):
+            response_text = "\n".join(self._clean_text(item) for item in response if self._clean_text(item))
         else:
-            yield event.plain_result("⚠️ 命令执行失败")
+            response_text = self._clean_text(response)
+        yield event.plain_result(
+            f"执行结果:\n{response_text or '服务器已接受命令，但没有返回额外文本。'}"
+        )
 
     async def destroy(self):
         if self._monitor_task:
@@ -218,4 +381,4 @@ class Main(Star):
                 pass
         if self._session:
             await self._session.close()
-        logger.info("[Terraria] 已停止")
+        logger.info("[TShock Bridge] Plugin stopped.")
