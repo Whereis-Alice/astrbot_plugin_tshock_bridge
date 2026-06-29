@@ -33,6 +33,7 @@
 | `tshock_password` | TShock 密码，`password` 模式使用 |
 | `tshock_token` | 现成 token，`token` 模式使用 |
 | `tshock_token_endpoint` | token 接口路径，默认 `/token/create` |
+| `token_login_cooldown` | 登录失败冷却秒数，默认 `300`，填 `0` 可关闭 |
 | `session_ids` | 通知目标 session ID 列表 |
 | `group_ids` | 允许使用插件命令的群 ID |
 | `admin_ids` | 允许使用 `/tc` 和 `/tsdebug` 的管理员 ID |
@@ -51,7 +52,7 @@ curl -G 'http://your-host:port/token/create' \
 
 ## 登录 403
 
-TShock 的 `/token/create` 会把多种情况都返回成同一句 403：账号不存在、密码错误、用户组缺少 `tshock.rest.useapi`、同一 IP 的 REST 登录请求桶触发限流。
+TShock 的 `/token/create` 会把多种情况都返回成同一句 403：账号不存在、密码错误、用户组缺少 `tshock.rest.useapi`、同一 IP 的 REST 登录请求桶触发限流。插件默认会在账号密码登录失败后冷却 `300` 秒再重试，可通过 `token_login_cooldown` 调整。
 
 如果要使用 `password` 模式，请确认账号所在组拥有：
 

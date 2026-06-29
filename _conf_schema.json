@@ -39,6 +39,12 @@
     "default": "/token/create",
     "hint": "通常保持默认；也可填 /v2/token/create。"
   },
+  "token_login_cooldown": {
+    "description": "登录冷却秒",
+    "type": "int",
+    "default": 300,
+    "hint": "账号密码申请 token 失败后的重试冷却；填 0 可关闭。"
+  },
   "session_ids": {
     "description": "通知 session",
     "type": "list",

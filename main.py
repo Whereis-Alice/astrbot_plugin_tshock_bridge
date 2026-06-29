@@ -14,8 +14,7 @@ from astrbot.core.message.message_event_result import MessageChain
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
 _UNAUTHORIZED_STATUSES = {"401", "403"}
-_TOKEN_LOGIN_COOLDOWN_SECONDS = 300
-_COOLDOWN_LOG_INTERVAL_SECONDS = 60
+_DEFAULT_TOKEN_LOGIN_COOLDOWN_SECONDS = 300
 _AUTH_MODE_PASSWORD = "password"
 _AUTH_MODE_TOKEN = "token"
 
@@ -35,7 +34,6 @@ class Main(Star):
         self._configured_static_token: str | None = None
         self._static_token_rejected = False
         self._last_token_failure_at = 0.0
-        self._last_cooldown_log_at = 0.0
 
     async def initialize(self):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
@@ -113,6 +111,16 @@ class Main(Star):
             interval = 30
         return max(5, interval)
 
+    def _token_login_cooldown_seconds(self) -> int:
+        raw_cooldown = self.config.get(
+            "token_login_cooldown", _DEFAULT_TOKEN_LOGIN_COOLDOWN_SECONDS
+        )
+        try:
+            cooldown = int(raw_cooldown)
+        except (TypeError, ValueError):
+            cooldown = _DEFAULT_TOKEN_LOGIN_COOLDOWN_SECONDS
+        return max(0, cooldown)
+
     def _auth_mode(self) -> str:
         raw_mode = self._clean_text(self.config.get("auth_mode", "")).lower()
         mode_aliases = {
@@ -144,8 +152,11 @@ class Main(Star):
     def _token_login_cooldown_remaining(self) -> int:
         if not self._last_token_failure_at:
             return 0
+        cooldown = self._token_login_cooldown_seconds()
+        if cooldown <= 0:
+            return 0
         elapsed = time.monotonic() - self._last_token_failure_at
-        return max(0, int(_TOKEN_LOGIN_COOLDOWN_SECONDS - elapsed))
+        return max(0, int(cooldown - elapsed))
 
     def _text_fingerprint(self, value: str) -> str:
         if not value:
@@ -179,6 +190,7 @@ class Main(Star):
             f"token_endpoint={custom_endpoint or 'auto'}",
             f"endpoint_candidates={','.join(self._token_endpoint_candidates())}",
             f"local_token={'set' if self._token else 'empty'}",
+            f"cooldown_config={self._token_login_cooldown_seconds()}s",
             f"cooldown_remaining={self._token_login_cooldown_remaining()}s",
         ]
 
@@ -235,14 +247,6 @@ class Main(Star):
 
         cooldown_remaining = self._token_login_cooldown_remaining()
         if cooldown_remaining > 0:
-            now = time.monotonic()
-            if now - self._last_cooldown_log_at >= _COOLDOWN_LOG_INTERVAL_SECONDS:
-                logger.warning(
-                    "[TShock Bridge] Token login is cooling down for %ss after a previous "
-                    "failure to avoid TShock REST rate limiting. Set tshock_token to bypass login.",
-                    cooldown_remaining,
-                )
-                self._last_cooldown_log_at = now
             return False
 
         async with self._token_lock:
@@ -276,7 +280,6 @@ class Main(Star):
             if data and str(data.get("status")) == "200" and data.get("token"):
                 self._token = self._clean_text(data.get("token"))
                 self._last_token_failure_at = 0.0
-                self._last_cooldown_log_at = 0.0
                 logger.info("[TShock Bridge] Token fetched successfully via %s.", endpoint)
                 return True
 
@@ -289,12 +292,14 @@ class Main(Star):
                 break
 
         self._last_token_failure_at = time.monotonic()
+        cooldown = self._token_login_cooldown_seconds()
         logger.error(
             "[TShock Bridge] Failed to fetch token. Tried: %s. "
             "TShock returns the same 403 for bad credentials, missing tshock.rest.useapi, "
-            "and REST login rate limiting. The plugin will cool down before retrying. "
+            "and REST login rate limiting. The plugin will cool down for %ss before retrying. "
             "Set tshock_token to bypass token login.",
             " | ".join(attempts) if attempts else "no endpoint",
+            cooldown,
         )
         return False
 
@@ -487,7 +492,6 @@ class Main(Star):
 
         if normalized_action in {"login", "test", "force"}:
             self._last_token_failure_at = 0.0
-            self._last_cooldown_log_at = 0.0
             self._token = None
             ok = await self._refresh_token()
             lines.append(f"manual_login={'success' if ok else 'failed'}")
