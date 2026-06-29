@@ -73,6 +73,8 @@ tshock.rest.command
 
 - `/ss` 查看服务器在线状态
 - `/tc <命令>` 远程执行 TShock 命令，例如 `/tc who`
+- `/tsdebug` 管理员诊断当前插件读取到的配置摘要，不输出完整密码或完整 token
+- `/tsdebug login` 管理员强制尝试一次账号密码登录，用于确认 TShock 登录限流是否解除
 
 ## 说明
 

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import time
 from typing import Any
@@ -37,6 +38,7 @@ class Main(Star):
     async def initialize(self):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
         self._sync_static_token_state()
+        logger.info("[TShock Bridge] Config summary: %s", "; ".join(self._debug_config_lines()))
         if self._configured_static_token:
             self._token = self._configured_static_token
             logger.info("[TShock Bridge] Using configured static token.")
@@ -118,6 +120,39 @@ class Main(Star):
             return 0
         elapsed = time.monotonic() - self._last_token_failure_at
         return max(0, int(_TOKEN_LOGIN_COOLDOWN_SECONDS - elapsed))
+
+    def _text_fingerprint(self, value: str) -> str:
+        if not value:
+            return "empty"
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
+        first = f"U+{ord(value[0]):04X}"
+        last = f"U+{ord(value[-1]):04X}"
+        return f"len={len(value)}, first={first}, last={last}, sha256={digest}"
+
+    def _mask_text(self, value: str) -> str:
+        if not value:
+            return "empty"
+        if len(value) == 1:
+            return "*"
+        if len(value) == 2:
+            return f"{value[0]}*"
+        return f"{value[0]}{'*' * (len(value) - 2)}{value[-1]}"
+
+    def _debug_config_lines(self) -> list[str]:
+        username = self._clean_text(self.config.get("tshock_username", ""))
+        password = self._clean_text(self.config.get("tshock_password", ""))
+        static_token = self._clean_text(self.config.get("tshock_token", ""))
+        custom_endpoint = self._clean_text(self.config.get("tshock_token_endpoint", ""))
+        return [
+            f"host={self._normalize_host() or 'empty'}",
+            f"username={self._mask_text(username)} ({self._text_fingerprint(username)})",
+            f"password=masked ({self._text_fingerprint(password)})",
+            f"static_token={'set' if static_token else 'empty'} ({self._text_fingerprint(static_token)})",
+            f"token_endpoint={custom_endpoint or 'auto'}",
+            f"endpoint_candidates={','.join(self._token_endpoint_candidates())}",
+            f"local_token={'set' if self._token else 'empty'}",
+            f"cooldown_remaining={self._token_login_cooldown_remaining()}s",
+        ]
 
     async def _request_json(
         self, url: str, params: dict[str, str] | None = None
@@ -407,6 +442,29 @@ class Main(Star):
         yield event.plain_result(
             f"执行结果:\n{response_text or '服务器已接受命令，但没有返回额外文本。'}"
         )
+
+    @filter.command("tsdebug")
+    async def cmd_debug(self, event: AstrMessageEvent, action: str = ""):
+        if not self._allowed(event):
+            return
+        if not self._is_admin(event):
+            yield event.plain_result("你没有权限执行这个命令。")
+            return
+
+        normalized_action = action.strip().lower()
+        lines = ["TShock Bridge 诊断:", *self._debug_config_lines()]
+
+        if normalized_action in {"login", "test", "force"}:
+            self._last_token_failure_at = 0.0
+            self._last_cooldown_log_at = 0.0
+            self._token = None
+            ok = await self._refresh_token()
+            lines.append(f"manual_login={'success' if ok else 'failed'}")
+            lines.append(f"cooldown_remaining_after={self._token_login_cooldown_remaining()}s")
+        else:
+            lines.append("提示: 使用 /tsdebug login 可强制尝试一次账号密码登录。")
+
+        yield event.plain_result("\n".join(lines))
 
     async def destroy(self):
         if self._monitor_task:
