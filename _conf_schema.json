@@ -12,19 +12,19 @@
   "tshock_password": {
     "description": "TShock REST API 密码。未填写静态 token 时使用。",
     "type": "string",
-    "default": "",
-    "invisible": true
+    "default": ""
   },
   "tshock_token": {
     "description": "可选。手动填写现成的 TShock token，填写后优先使用，不再依赖 token/create 登录。",
     "type": "string",
     "default": "",
-    "invisible": true
+    "hint": "登录接口不稳定时再填写，通常留空即可。"
   },
   "tshock_token_endpoint": {
     "description": "可选。自定义 token 获取接口路径，例如 /token/create 或 /v2/token/create。留空时会自动依次尝试这两个端点。",
     "type": "string",
-    "default": ""
+    "default": "",
+    "hint": "通常留空即可。"
   },
   "session_ids": {
     "description": "需要推送通知的 session ID 列表，可通过 /sid 获取，例如 default:GroupMessage:1021285757",

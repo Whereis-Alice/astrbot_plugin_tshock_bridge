@@ -34,6 +34,9 @@
 | `notify_join_leave` | 是否推送上下线通知 |
 | `poll_interval` | 轮询间隔，单位秒 |
 
+说明：
+`tshock_token_endpoint` 一般不用填，保持为空即可。正常账号密码登录时，密码应该填写在 `tshock_password`。
+
 ## 静态 token 用法
 
 如果你的 TShock 服务器对用户名密码登录不稳定，可以先手动取 token，再填到 `tshock_token`：
