@@ -1,63 +1,80 @@
 {
   "tshock_host": {
-    "description": "TShock REST API 地址，包含端口，例如 http://1.2.3.4:7878",
+    "description": "REST API 地址",
     "type": "string",
-    "default": ""
+    "default": "",
+    "hint": "例如 http://1.2.3.4:7878"
+  },
+  "auth_mode": {
+    "description": "认证模式",
+    "type": "string",
+    "default": "password",
+    "options": [
+      "password",
+      "token"
+    ],
+    "hint": "password=账号密码自动申请 token；token=使用现成 token。"
   },
   "tshock_username": {
-    "description": "TShock REST API 用户名。未填写静态 token 时使用。",
+    "description": "TShock 用户名",
     "type": "string",
-    "default": ""
+    "default": "",
+    "hint": "auth_mode=password 时填写。"
   },
   "tshock_password": {
-    "description": "TShock REST API 密码。未填写静态 token 时使用。",
+    "description": "TShock 密码",
     "type": "string",
-    "default": ""
+    "default": "",
+    "hint": "auth_mode=password 时填写。"
   },
   "tshock_token": {
-    "description": "可选。手动填写现成的 TShock token，填写后优先使用，不再依赖 token/create 登录。",
+    "description": "现成 token",
     "type": "string",
     "default": "",
-    "hint": "登录接口不稳定或触发限流时推荐填写。"
+    "hint": "auth_mode=token 时填写。"
   },
   "tshock_token_endpoint": {
-    "description": "可选。自定义 token 获取接口路径，例如 /token/create 或 /v2/token/create。留空时会自动尝试默认端点。",
+    "description": "token 接口路径",
     "type": "string",
-    "default": "",
-    "hint": "通常留空即可。"
+    "default": "/token/create",
+    "hint": "通常保持默认；也可填 /v2/token/create。"
   },
   "session_ids": {
-    "description": "需要推送通知的 session ID 列表，可通过 /sid 获取，例如 default:GroupMessage:1021285757",
+    "description": "通知 session",
     "type": "list",
     "items": {
       "type": "string"
     },
-    "default": []
+    "default": [],
+    "hint": "通过 /sid 获取，例如 default:GroupMessage:1021285757。"
   },
   "group_ids": {
-    "description": "允许使用插件命令的群 ID 列表，只填写数字字符串。",
+    "description": "允许群 ID",
     "type": "list",
     "items": {
       "type": "string"
     },
-    "default": []
+    "default": [],
+    "hint": "只填写群号字符串。"
   },
   "admin_ids": {
-    "description": "允许执行 /tc 命令的管理员 ID 列表，填写平台用户 ID，例如 QQ 号。",
+    "description": "管理员 ID",
     "type": "list",
     "items": {
       "type": "string"
     },
-    "default": []
+    "default": [],
+    "hint": "允许使用 /tc 和 /tsdebug 的平台用户 ID。"
   },
   "notify_join_leave": {
-    "description": "是否推送玩家上下线通知。",
+    "description": "上下线通知",
     "type": "bool",
     "default": true
   },
   "poll_interval": {
-    "description": "轮询间隔，单位秒，最低会按 5 秒处理。",
+    "description": "轮询间隔秒",
     "type": "int",
-    "default": 30
+    "default": 30,
+    "hint": "最低按 5 秒处理。"
   }
 }

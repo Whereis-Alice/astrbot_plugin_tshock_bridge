@@ -16,6 +16,8 @@ _DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
 _UNAUTHORIZED_STATUSES = {"401", "403"}
 _TOKEN_LOGIN_COOLDOWN_SECONDS = 300
 _COOLDOWN_LOG_INTERVAL_SECONDS = 60
+_AUTH_MODE_PASSWORD = "password"
+_AUTH_MODE_TOKEN = "token"
 
 
 class Main(Star):
@@ -39,9 +41,12 @@ class Main(Star):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
         self._sync_static_token_state()
         logger.info("[TShock Bridge] Config summary: %s", "; ".join(self._debug_config_lines()))
-        if self._configured_static_token:
+        if self._auth_mode() == _AUTH_MODE_TOKEN:
             self._token = self._configured_static_token
-            logger.info("[TShock Bridge] Using configured static token.")
+            if self._token:
+                logger.info("[TShock Bridge] Using configured static token.")
+            else:
+                logger.warning("[TShock Bridge] auth_mode=token but tshock_token is empty.")
         else:
             await self._refresh_token()
         self._monitor_task = asyncio.create_task(self._monitor_loop())
@@ -87,7 +92,9 @@ class Main(Star):
         return unique
 
     def _sync_static_token_state(self):
-        configured = self._clean_text(self.config.get("tshock_token", "")) or None
+        configured = None
+        if self._auth_mode() == _AUTH_MODE_TOKEN:
+            configured = self._clean_text(self.config.get("tshock_token", "")) or None
         previous = self._configured_static_token
         if configured == self._configured_static_token:
             return
@@ -105,6 +112,25 @@ class Main(Star):
         except (TypeError, ValueError):
             interval = 30
         return max(5, interval)
+
+    def _auth_mode(self) -> str:
+        raw_mode = self._clean_text(self.config.get("auth_mode", "")).lower()
+        mode_aliases = {
+            "password": _AUTH_MODE_PASSWORD,
+            "account": _AUTH_MODE_PASSWORD,
+            "账号密码": _AUTH_MODE_PASSWORD,
+            "token": _AUTH_MODE_TOKEN,
+            "static_token": _AUTH_MODE_TOKEN,
+            "现成token": _AUTH_MODE_TOKEN,
+            "现成 token": _AUTH_MODE_TOKEN,
+        }
+        if raw_mode:
+            return mode_aliases.get(raw_mode, _AUTH_MODE_PASSWORD)
+
+        # Backward compatibility for configs created before auth_mode existed.
+        if self._clean_text(self.config.get("tshock_token", "")):
+            return _AUTH_MODE_TOKEN
+        return _AUTH_MODE_PASSWORD
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
         return self._clean_text(event.get_group_id()) in self._string_id_set("group_ids")
@@ -139,11 +165,13 @@ class Main(Star):
         return f"{value[0]}{'*' * (len(value) - 2)}{value[-1]}"
 
     def _debug_config_lines(self) -> list[str]:
+        auth_mode = self._auth_mode()
         username = self._clean_text(self.config.get("tshock_username", ""))
         password = self._clean_text(self.config.get("tshock_password", ""))
         static_token = self._clean_text(self.config.get("tshock_token", ""))
         custom_endpoint = self._clean_text(self.config.get("tshock_token_endpoint", ""))
         return [
+            f"auth_mode={auth_mode}",
             f"host={self._normalize_host() or 'empty'}",
             f"username={self._mask_text(username)} ({self._text_fingerprint(username)})",
             f"password=masked ({self._text_fingerprint(password)})",
@@ -196,8 +224,11 @@ class Main(Star):
         if self._token:
             return True
 
-        if self._configured_static_token:
+        if self._auth_mode() == _AUTH_MODE_TOKEN:
             if self._static_token_rejected:
+                return False
+            if not self._configured_static_token:
+                logger.warning("[TShock Bridge] auth_mode=token but tshock_token is empty.")
                 return False
             self._token = self._configured_static_token
             return True
@@ -462,7 +493,7 @@ class Main(Star):
             lines.append(f"manual_login={'success' if ok else 'failed'}")
             lines.append(f"cooldown_remaining_after={self._token_login_cooldown_remaining()}s")
         else:
-            lines.append("提示: 使用 /tsdebug login 可强制尝试一次账号密码登录。")
+            lines.append("提示: 使用 /tsdebug login 可强制测试账号密码申请 token。")
 
         yield event.plain_result("\n".join(lines))
 
