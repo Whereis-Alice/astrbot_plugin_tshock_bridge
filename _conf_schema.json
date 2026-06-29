@@ -18,10 +18,10 @@
     "description": "可选。手动填写现成的 TShock token，填写后优先使用，不再依赖 token/create 登录。",
     "type": "string",
     "default": "",
-    "hint": "登录接口不稳定时再填写，通常留空即可。"
+    "hint": "登录接口不稳定或触发限流时推荐填写。"
   },
   "tshock_token_endpoint": {
-    "description": "可选。自定义 token 获取接口路径，例如 /token/create 或 /v2/token/create。留空时会自动依次尝试这两个端点。",
+    "description": "可选。自定义 token 获取接口路径，例如 /token/create 或 /v2/token/create。留空时会自动尝试默认端点。",
     "type": "string",
     "default": "",
     "hint": "通常留空即可。"
@@ -35,7 +35,7 @@
     "default": []
   },
   "group_ids": {
-    "description": "允许使用插件命令的群 ID 列表，只填数字字符串。",
+    "description": "允许使用插件命令的群 ID 列表，只填写数字字符串。",
     "type": "list",
     "items": {
       "type": "string"

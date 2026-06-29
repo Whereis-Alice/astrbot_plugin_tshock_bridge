@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Any
 
 import aiohttp
@@ -12,6 +13,8 @@ from astrbot.core.message.message_event_result import MessageChain
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
 _UNAUTHORIZED_STATUSES = {"401", "403"}
+_TOKEN_LOGIN_COOLDOWN_SECONDS = 300
+_COOLDOWN_LOG_INTERVAL_SECONDS = 60
 
 
 class Main(Star):
@@ -28,6 +31,8 @@ class Main(Star):
         self._token_lock = asyncio.Lock()
         self._configured_static_token: str | None = None
         self._static_token_rejected = False
+        self._last_token_failure_at = 0.0
+        self._last_cooldown_log_at = 0.0
 
     async def initialize(self):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
@@ -108,6 +113,12 @@ class Main(Star):
             return False
         return self._clean_text(event.get_sender_id()) in admin_ids
 
+    def _token_login_cooldown_remaining(self) -> int:
+        if not self._last_token_failure_at:
+            return 0
+        elapsed = time.monotonic() - self._last_token_failure_at
+        return max(0, int(_TOKEN_LOGIN_COOLDOWN_SECONDS - elapsed))
+
     async def _request_json(
         self, url: str, params: dict[str, str] | None = None
     ) -> tuple[int | None, dict[str, Any] | None]:
@@ -156,9 +167,23 @@ class Main(Star):
             self._token = self._configured_static_token
             return True
 
+        cooldown_remaining = self._token_login_cooldown_remaining()
+        if cooldown_remaining > 0:
+            now = time.monotonic()
+            if now - self._last_cooldown_log_at >= _COOLDOWN_LOG_INTERVAL_SECONDS:
+                logger.warning(
+                    "[TShock Bridge] Token login is cooling down for %ss after a previous "
+                    "failure to avoid TShock REST rate limiting. Set tshock_token to bypass login.",
+                    cooldown_remaining,
+                )
+                self._last_cooldown_log_at = now
+            return False
+
         async with self._token_lock:
             if self._token:
                 return True
+            if self._token_login_cooldown_remaining() > 0:
+                return False
             return await self._refresh_token()
 
     async def _refresh_token(self) -> bool:
@@ -184,6 +209,8 @@ class Main(Star):
             )
             if data and str(data.get("status")) == "200" and data.get("token"):
                 self._token = self._clean_text(data.get("token"))
+                self._last_token_failure_at = 0.0
+                self._last_cooldown_log_at = 0.0
                 logger.info("[TShock Bridge] Token fetched successfully via %s.", endpoint)
                 return True
 
@@ -191,9 +218,16 @@ class Main(Star):
                 f"{endpoint} -> http={status_code}, body={data if data is not None else 'null'}"
             )
 
+            api_status = self._clean_text(data.get("status")) if data else ""
+            if status_code in (401, 403) or api_status in _UNAUTHORIZED_STATUSES:
+                break
+
+        self._last_token_failure_at = time.monotonic()
         logger.error(
             "[TShock Bridge] Failed to fetch token. Tried: %s. "
-            "If your server keeps rejecting username/password, set tshock_token manually.",
+            "TShock returns the same 403 for bad credentials, missing tshock.rest.useapi, "
+            "and REST login rate limiting. The plugin will cool down before retrying. "
+            "Set tshock_token to bypass token login.",
             " | ".join(attempts) if attempts else "no endpoint",
         )
         return False
@@ -365,7 +399,9 @@ class Main(Star):
 
         response = result.get("response", [])
         if isinstance(response, list):
-            response_text = "\n".join(self._clean_text(item) for item in response if self._clean_text(item))
+            response_text = "\n".join(
+                self._clean_text(item) for item in response if self._clean_text(item)
+            )
         else:
             response_text = self._clean_text(response)
         yield event.plain_result(
