@@ -142,6 +142,15 @@ class Main(Star):
             return _AUTH_MODE_TOKEN
         return _AUTH_MODE_PASSWORD
 
+    def _extract_command_tail(self, event: AstrMessageEvent, command_name: str, fallback: str = "") -> str:
+        message_text = self._clean_text(getattr(event, "message_str", ""))
+        prefixes = (f"/{command_name}", f"／{command_name}")
+        lowered = message_text.lower()
+        for prefix in prefixes:
+            if lowered.startswith(prefix.lower()):
+                return message_text[len(prefix):].strip()
+        return fallback.strip()
+
     def _allowed(self, event: AstrMessageEvent) -> bool:
         return self._clean_text(event.get_group_id()) in self._string_id_set("group_ids")
 
@@ -495,7 +504,7 @@ class Main(Star):
             yield event.plain_result("你没有权限执行这个命令。")
             return
 
-        normalized_cmd = cmd.strip()
+        normalized_cmd = self._extract_command_tail(event, "tc", cmd)
         if not normalized_cmd:
             yield event.plain_result("用法: /tc <命令>")
             return

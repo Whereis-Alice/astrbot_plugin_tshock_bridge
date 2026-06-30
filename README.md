@@ -72,7 +72,7 @@ tshock.rest.command
 ## 指令
 
 - `/ss` 查看服务器在线状态
-- `/tc <命令>` 远程执行 TShock 命令，例如 `/tc who`
+- `/tc <命令>` 远程执行 TShock 命令，例如 `/tc who`、`/tc apm l`
 - `/tsdebug` 查看插件读取到的配置摘要，不输出完整密码或完整 token
 - `/tsdebug login` 强制测试一次账号密码申请 token
 

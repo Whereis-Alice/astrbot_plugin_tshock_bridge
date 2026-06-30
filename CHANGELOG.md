@@ -2,6 +2,12 @@
 
 本项目基于 [Reisenbug/AstrBot_Plugin_Terraria_Server_Manager](https://github.com/Reisenbug/AstrBot_Plugin_Terraria_Server_Manager) 改造。
 
+## 0.3.3
+
+- 修复 `/tc` 只接收到第一个参数的问题。
+- `/tc apm l`、`/tc apm i 1` 等多段 TShock 命令现在会完整转发。
+- 兼容中文全角斜杠 `／tc` 的命令尾部解析。
+
 ## 0.3.2
 
 - 对 `session_ids` 自动去重，避免同一个群或会话被配置多次时重复推送。
