@@ -1,7 +1,7 @@
 name: astrbot_plugin_tshock_bridge
 display_name: "TShock 服务器桥接"
-desc: "基于 Reisenbug/AstrBot_Plugin_Terraria_Server_Manager 改造，支持账号密码和现成 token 两种认证模式。"
-version: 0.3.4
+desc: "基于 Reisenbug/AstrBot_Plugin_Terraria_Server_Manager 改造，支持 TShock 状态查询、命令执行、双认证模式和 LLM 工具。"
+version: 0.4.0
 author: Whereis-Alice
 astrbot_version: ">=4.16.0"
 repo: "https://github.com/Whereis-Alice/astrbot_plugin_tshock_bridge"

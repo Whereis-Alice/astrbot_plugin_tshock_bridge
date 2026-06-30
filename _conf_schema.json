@@ -45,6 +45,12 @@
     "default": 300,
     "hint": "账号密码申请 token 失败后的重试冷却；填 0 可关闭。"
   },
+  "enable_llm_tools": {
+    "description": "启用 LLM 工具",
+    "type": "bool",
+    "default": true,
+    "hint": "允许大模型通过工具查询状态或执行 TShock 命令。"
+  },
   "session_ids": {
     "description": "通知 session",
     "type": "list",

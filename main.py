@@ -5,10 +5,14 @@ import time
 from typing import Any
 
 import aiohttp
+from pydantic import Field
+from pydantic.dataclasses import dataclass
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig, FunctionTool, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -19,6 +23,106 @@ _DEFAULT_TOKEN_LOGIN_COOLDOWN_SECONDS = 300
 _NOTIFY_DEDUP_WINDOW_SECONDS = 10
 _AUTH_MODE_PASSWORD = "password"
 _AUTH_MODE_TOKEN = "token"
+_LLM_STATUS_TOOL_NAME = "tshock_server_status"
+_LLM_COMMAND_TOOL_NAME = "tshock_run_command"
+_LLM_TOOL_NAMES = (_LLM_STATUS_TOOL_NAME, _LLM_COMMAND_TOOL_NAME)
+_DANGEROUS_LLM_COMMAND_PREFIXES = (
+    "ban",
+    "unban",
+    "kick",
+    "mute",
+    "unmute",
+    "kill",
+    "butcher",
+    "off",
+    "exit",
+    "restart",
+    "reload",
+    "apm i",
+    "apm install",
+    "apm u",
+    "apm uninstall",
+    "apm update",
+)
+
+
+@dataclass
+class TShockStatusTool(FunctionTool[AstrAgentContext]):
+    __pydantic_config__ = {"arbitrary_types_allowed": True}
+
+    bridge: Any = Field(default=None, repr=False)
+    name: str = _LLM_STATUS_TOOL_NAME
+    description: str = (
+        "Query the Terraria TShock server status, including world, version, "
+        "online player count, and player names. Use this for natural-language "
+        "questions about the server status or online players."
+    )
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+        }
+    )
+
+    async def call(
+        self, context: ContextWrapper[AstrAgentContext], **kwargs
+    ) -> str:
+        event = self.bridge._event_from_tool_context(context)
+        permission_error = self.bridge._tool_permission_error(
+            event, require_admin=False
+        )
+        if permission_error:
+            return permission_error
+        return await self.bridge._status_text()
+
+
+@dataclass
+class TShockCommandTool(FunctionTool[AstrAgentContext]):
+    __pydantic_config__ = {"arbitrary_types_allowed": True}
+
+    bridge: Any = Field(default=None, repr=False)
+    name: str = _LLM_COMMAND_TOOL_NAME
+    description: str = (
+        "Run a TShock server command through the configured REST API. "
+        "Use this only when the current user is asking to operate the Terraria "
+        "server. Pass the command without the leading / when possible, for "
+        "example 'who' or 'apm l'."
+    )
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "TShock command to run, with or without a leading slash. Examples: who, apm l, help.",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "Set true only when the user explicitly confirmed a potentially disruptive command.",
+                },
+            },
+            "required": ["command"],
+        }
+    )
+
+    async def call(
+        self, context: ContextWrapper[AstrAgentContext], **kwargs
+    ) -> str:
+        event = self.bridge._event_from_tool_context(context)
+        permission_error = self.bridge._tool_permission_error(event, require_admin=True)
+        if permission_error:
+            return permission_error
+
+        command = self.bridge._clean_text(kwargs.get("command", ""))
+        confirmed = kwargs.get("confirmed") is True
+        if not command:
+            return "error: command 参数为空。"
+        if self.bridge._llm_command_needs_confirmation(command) and not confirmed:
+            return (
+                "需要用户明确确认后才能执行该 TShock 命令。"
+                "请先向用户说明风险，并在用户确认后再次调用工具且 confirmed=true。"
+            )
+        return await self.bridge._command_text(command)
 
 
 class Main(Star):
@@ -50,11 +154,50 @@ class Main(Star):
                 logger.warning("[TShock Bridge] auth_mode=token but tshock_token is empty.")
         else:
             await self._refresh_token()
+        if self._llm_tools_enabled():
+            self._register_llm_tools()
+        else:
+            self._unregister_llm_tools()
         self._monitor_task = asyncio.create_task(self._monitor_loop())
         logger.info("[TShock Bridge] Monitor task started.")
 
     def _clean_text(self, value: Any) -> str:
         return str(value).strip() if value is not None else ""
+
+    def _llm_tools_enabled(self) -> bool:
+        raw_enabled = self.config.get("enable_llm_tools", True)
+        if isinstance(raw_enabled, str):
+            return raw_enabled.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(raw_enabled)
+
+    def _register_llm_tools(self):
+        self.context.add_llm_tools(
+            TShockStatusTool(bridge=self),
+            TShockCommandTool(bridge=self),
+        )
+        logger.info("[TShock Bridge] LLM tools registered.")
+
+    def _unregister_llm_tools(self):
+        manager = self.context.get_llm_tool_manager()
+        for tool_name in _LLM_TOOL_NAMES:
+            manager.remove_func(tool_name)
+
+    def _event_from_tool_context(
+        self, context: ContextWrapper[AstrAgentContext]
+    ) -> AstrMessageEvent | None:
+        agent_context = getattr(context, "context", None)
+        return getattr(agent_context, "event", None)
+
+    def _tool_permission_error(
+        self, event: AstrMessageEvent | None, require_admin: bool
+    ) -> str:
+        if event is None:
+            return "error: 缺少消息上下文，无法校验 TShock Bridge 权限。"
+        if not self._allowed(event):
+            return "error: 当前会话不在 TShock Bridge group_ids 白名单中。"
+        if require_admin and not self._is_admin(event):
+            return "error: 当前用户不在 TShock Bridge admin_ids 白名单中，不能执行 TShock 命令。"
+        return ""
 
     def _normalize_host(self) -> str:
         return self._clean_text(self.config.get("tshock_host", "")).rstrip("/")
@@ -162,6 +305,13 @@ class Main(Star):
             normalized_cmd = f"/{normalized_cmd}"
         return normalized_cmd
 
+    def _llm_command_needs_confirmation(self, cmd: str) -> bool:
+        command_key = " ".join(self._format_raw_command(cmd).lstrip("/").lower().split())
+        return any(
+            command_key == prefix or command_key.startswith(f"{prefix} ")
+            for prefix in _DANGEROUS_LLM_COMMAND_PREFIXES
+        )
+
     def _allowed(self, event: AstrMessageEvent) -> bool:
         return self._clean_text(event.get_group_id()) in self._string_id_set("group_ids")
 
@@ -217,6 +367,7 @@ class Main(Star):
             f"token_endpoint={custom_endpoint or 'auto'}",
             f"endpoint_candidates={','.join(self._token_endpoint_candidates())}",
             f"sessions={len(configured_sessions)} configured/{len(set(configured_sessions))} unique",
+            f"llm_tools={'enabled' if self._llm_tools_enabled() else 'disabled'}",
             f"local_token={'set' if self._token else 'empty'}",
             f"cooldown_config={self._token_login_cooldown_seconds()}s",
             f"cooldown_remaining={self._token_login_cooldown_remaining()}s",
@@ -430,6 +581,51 @@ class Main(Star):
             return "暂无玩家"
         return "、".join(sorted(players))
 
+    def _format_status_message(self, status: dict[str, Any]) -> str:
+        players = self._parse_players(status)
+        player_count = self._clean_text(status.get("playercount")) or str(len(players))
+        max_players = self._clean_text(status.get("maxplayers")) or "?"
+        world = self._clean_text(status.get("world")) or "未知世界"
+        server_version = self._clean_text(status.get("serverversion")) or "未知版本"
+        return (
+            f"世界: {world}\n"
+            f"版本: {server_version}\n"
+            f"在线: {player_count}/{max_players}\n"
+            f"玩家: {self._format_players(players)}"
+        )
+
+    def _format_command_result(self, result: dict[str, Any]) -> str:
+        response = result.get("response", [])
+        if isinstance(response, list):
+            response_text = "\n".join(
+                self._clean_text(item) for item in response if self._clean_text(item)
+            )
+        else:
+            response_text = self._clean_text(response)
+        return f"执行结果:\n{response_text or '服务器已接受命令，但没有返回额外文本。'}"
+
+    async def _status_text(self) -> str:
+        if not await self._ensure_token():
+            return "无法连接到 TShock REST API。"
+
+        status = await self._get_status()
+        if not status or self._clean_text(status.get("status")) != "200":
+            return "无法获取服务器状态。"
+        return self._format_status_message(status)
+
+    async def _command_text(self, cmd: str) -> str:
+        if not await self._ensure_token():
+            return "无法连接到 TShock REST API。"
+
+        raw_command = self._format_raw_command(cmd)
+        result = await self._exec_command(raw_command)
+        if not result and await self._ensure_token():
+            result = await self._exec_command(raw_command)
+
+        if not result:
+            return "命令执行失败。"
+        return self._format_command_result(result)
+
     async def _poll(self):
         if not await self._ensure_token():
             return
@@ -485,27 +681,7 @@ class Main(Star):
         if not self._allowed(event):
             return
 
-        if not await self._ensure_token():
-            yield event.plain_result("无法连接到 TShock REST API。")
-            return
-
-        status = await self._get_status()
-        if not status or self._clean_text(status.get("status")) != "200":
-            yield event.plain_result("无法获取服务器状态。")
-            return
-
-        players = self._parse_players(status)
-        player_count = self._clean_text(status.get("playercount")) or str(len(players))
-        max_players = self._clean_text(status.get("maxplayers")) or "?"
-        world = self._clean_text(status.get("world")) or "未知世界"
-        server_version = self._clean_text(status.get("serverversion")) or "未知版本"
-        message = (
-            f"世界: {world}\n"
-            f"版本: {server_version}\n"
-            f"在线: {player_count}/{max_players}\n"
-            f"玩家: {self._format_players(players)}"
-        )
-        yield event.plain_result(message)
+        yield event.plain_result(await self._status_text())
 
     @filter.command("tc")
     async def cmd_exec(self, event: AstrMessageEvent, cmd: GreedyStr):
@@ -520,29 +696,7 @@ class Main(Star):
             yield event.plain_result("用法: /tc <命令>")
             return
 
-        if not await self._ensure_token():
-            yield event.plain_result("无法连接到 TShock REST API。")
-            return
-
-        raw_command = self._format_raw_command(normalized_cmd)
-        result = await self._exec_command(raw_command)
-        if not result and await self._ensure_token():
-            result = await self._exec_command(raw_command)
-
-        if not result:
-            yield event.plain_result("命令执行失败。")
-            return
-
-        response = result.get("response", [])
-        if isinstance(response, list):
-            response_text = "\n".join(
-                self._clean_text(item) for item in response if self._clean_text(item)
-            )
-        else:
-            response_text = self._clean_text(response)
-        yield event.plain_result(
-            f"执行结果:\n{response_text or '服务器已接受命令，但没有返回额外文本。'}"
-        )
+        yield event.plain_result(await self._command_text(normalized_cmd))
 
     @filter.command("tsdebug")
     async def cmd_debug(self, event: AstrMessageEvent, action: str = ""):

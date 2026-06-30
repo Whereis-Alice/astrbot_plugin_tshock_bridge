@@ -12,6 +12,7 @@
 - 支持两种认证模式：账号密码自动申请 token、直接使用现成 token
 - 登录失败冷却，避免反复触发 TShock REST 登录限流
 - 上下线通知会自动去重，避免同一 session 或短时间重复事件导致刷屏
+- 可注册为 AstrBot LLM 工具，让大模型通过自然语言查询状态或执行 TShock 命令
 
 ## 认证模式
 
@@ -35,6 +36,7 @@
 | `tshock_token` | 现成 token，`token` 模式使用 |
 | `tshock_token_endpoint` | token 接口路径，默认 `/token/create` |
 | `token_login_cooldown` | 登录失败冷却秒数，默认 `300`，填 `0` 可关闭 |
+| `enable_llm_tools` | 是否注册 LLM 工具，默认开启 |
 | `session_ids` | 通知目标 session ID 列表 |
 | `group_ids` | 允许使用插件命令的群 ID |
 | `admin_ids` | 允许使用 `/tc` 和 `/tsdebug` 的管理员 ID |
@@ -75,6 +77,19 @@ tshock.rest.command
 - `/tc <命令>` 远程执行 TShock 命令，例如 `/tc who`、`/tc apm l`
 - `/tsdebug` 查看插件读取到的配置摘要，不输出完整密码或完整 token
 - `/tsdebug login` 强制测试一次账号密码申请 token
+
+## 自然语言工具
+
+插件默认会注册两个 AstrBot LLM 工具：
+
+| 工具 | 说明 | 权限 |
+| --- | --- | --- |
+| `tshock_server_status` | 查询服务器状态和在线玩家 | `group_ids` 白名单会话 |
+| `tshock_run_command` | 执行 TShock 命令 | `group_ids` 白名单会话 + `admin_ids` 管理员 |
+
+安装插件后，AstrBot 也会自动发现插件内置的 `tshock-bridge` skill，用来告诉大模型什么时候该调用这些工具、命令参数怎么写，以及哪些危险命令需要先向用户确认。比如你可以直接问机器人“泰拉瑞亚服务器现在有人吗”，或者让它“执行 apm l 看看插件列表”。
+
+如果不想让大模型使用这些工具，把 `enable_llm_tools` 设为 `false` 即可，传统 `/ss`、`/tc` 指令仍可使用。
 
 ## 重复通知
 

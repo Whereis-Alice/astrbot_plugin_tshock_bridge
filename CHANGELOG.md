@@ -2,6 +2,17 @@
 
 本项目基于 [Reisenbug/AstrBot_Plugin_Terraria_Server_Manager](https://github.com/Reisenbug/AstrBot_Plugin_Terraria_Server_Manager) 改造。
 
+## 0.4.0
+
+- 新增 `enable_llm_tools` 配置项，默认注册 AstrBot LLM 工具。
+- 新增 `tshock_server_status` 工具，让大模型可通过自然语言查询服务器状态和在线玩家。
+- 新增 `tshock_run_command` 工具，让大模型可在管理员白名单内执行 TShock 命令。
+- LLM 工具复用现有 `group_ids` 和 `admin_ids` 权限，不绕过插件原有白名单。
+- 对封禁、踢人、重启、关服、APM 安装/卸载/更新等危险命令增加二次确认要求。
+- 新增插件内置 skill：`skills/tshock-bridge/SKILL.md`，用于告诉大模型何时调用工具、命令格式和安全规则。
+- README 补充自然语言工具使用说明。
+- `.gitignore` 忽略 AstrBot SDK/运行时可能生成的 `data/` 目录，避免误提交运行数据。
+
 ## 0.3.4
 
 - 使用 AstrBot `GreedyStr` 接收 `/tc` 后面的完整命令内容，修复 `/tc apm l` 被解析成 `/apm` 的问题。
