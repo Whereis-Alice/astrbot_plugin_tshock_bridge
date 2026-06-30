@@ -2,6 +2,12 @@
 
 本项目基于 [Reisenbug/AstrBot_Plugin_Terraria_Server_Manager](https://github.com/Reisenbug/AstrBot_Plugin_Terraria_Server_Manager) 改造。
 
+## 0.3.4
+
+- 使用 AstrBot `GreedyStr` 接收 `/tc` 后面的完整命令内容，修复 `/tc apm l` 被解析成 `/apm` 的问题。
+- `/tc apm l`、`/tc apm i 1`、`/tc /apm l` 都会正确转发为 TShock rawcmd。
+- 增加命令斜杠规范化，避免用户手动输入斜杠时生成 `//command`。
+
 ## 0.3.3
 
 - 修复 `/tc` 只接收到第一个参数的问题。

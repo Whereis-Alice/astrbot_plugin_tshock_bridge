@@ -10,6 +10,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.star.filter.command import GreedyStr
 
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
@@ -144,12 +145,22 @@ class Main(Star):
 
     def _extract_command_tail(self, event: AstrMessageEvent, command_name: str, fallback: str = "") -> str:
         message_text = self._clean_text(getattr(event, "message_str", ""))
+        if not message_text and hasattr(event, "get_message_str"):
+            message_text = self._clean_text(event.get_message_str())
         prefixes = (f"/{command_name}", f"／{command_name}")
         lowered = message_text.lower()
         for prefix in prefixes:
             if lowered.startswith(prefix.lower()):
                 return message_text[len(prefix):].strip()
         return fallback.strip()
+
+    def _format_raw_command(self, cmd: str) -> str:
+        normalized_cmd = self._clean_text(cmd)
+        if normalized_cmd.startswith("／"):
+            normalized_cmd = f"/{normalized_cmd[1:]}"
+        if not normalized_cmd.startswith("/"):
+            normalized_cmd = f"/{normalized_cmd}"
+        return normalized_cmd
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
         return self._clean_text(event.get_group_id()) in self._string_id_set("group_ids")
@@ -497,7 +508,7 @@ class Main(Star):
         yield event.plain_result(message)
 
     @filter.command("tc")
-    async def cmd_exec(self, event: AstrMessageEvent, cmd: str = ""):
+    async def cmd_exec(self, event: AstrMessageEvent, cmd: GreedyStr):
         if not self._allowed(event):
             return
         if not self._is_admin(event):
@@ -513,9 +524,10 @@ class Main(Star):
             yield event.plain_result("无法连接到 TShock REST API。")
             return
 
-        result = await self._exec_command(f"/{normalized_cmd}")
+        raw_command = self._format_raw_command(normalized_cmd)
+        result = await self._exec_command(raw_command)
         if not result and await self._ensure_token():
-            result = await self._exec_command(f"/{normalized_cmd}")
+            result = await self._exec_command(raw_command)
 
         if not result:
             yield event.plain_result("命令执行失败。")
