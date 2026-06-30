@@ -15,6 +15,7 @@ _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _DEFAULT_TOKEN_ENDPOINTS = ("/token/create", "/v2/token/create")
 _UNAUTHORIZED_STATUSES = {"401", "403"}
 _DEFAULT_TOKEN_LOGIN_COOLDOWN_SECONDS = 300
+_NOTIFY_DEDUP_WINDOW_SECONDS = 10
 _AUTH_MODE_PASSWORD = "password"
 _AUTH_MODE_TOKEN = "token"
 
@@ -34,6 +35,7 @@ class Main(Star):
         self._configured_static_token: str | None = None
         self._static_token_rejected = False
         self._last_token_failure_at = 0.0
+        self._recent_notifications: dict[tuple[str, str, str], float] = {}
 
     async def initialize(self):
         self._session = aiohttp.ClientSession(timeout=_TIMEOUT)
@@ -181,6 +183,11 @@ class Main(Star):
         password = self._clean_text(self.config.get("tshock_password", ""))
         static_token = self._clean_text(self.config.get("tshock_token", ""))
         custom_endpoint = self._clean_text(self.config.get("tshock_token_endpoint", ""))
+        configured_sessions = [
+            self._clean_text(item)
+            for item in self.config.get("session_ids", [])
+            if self._clean_text(item)
+        ]
         return [
             f"auth_mode={auth_mode}",
             f"host={self._normalize_host() or 'empty'}",
@@ -189,6 +196,7 @@ class Main(Star):
             f"static_token={'set' if static_token else 'empty'} ({self._text_fingerprint(static_token)})",
             f"token_endpoint={custom_endpoint or 'auto'}",
             f"endpoint_candidates={','.join(self._token_endpoint_candidates())}",
+            f"sessions={len(configured_sessions)} configured/{len(set(configured_sessions))} unique",
             f"local_token={'set' if self._token else 'empty'}",
             f"cooldown_config={self._token_login_cooldown_seconds()}s",
             f"cooldown_remaining={self._token_login_cooldown_remaining()}s",
@@ -333,13 +341,45 @@ class Main(Star):
             return None
         return data
 
-    async def _send_to_groups(self, message: str):
+    def _deduped_session_ids(self) -> list[str]:
         session_ids = self.config.get("session_ids", [])
         if not isinstance(session_ids, list):
-            return
+            return []
+        deduped: list[str] = []
+        seen: set[str] = set()
         for session_id in session_ids:
             normalized = self._clean_text(session_id)
-            if not normalized:
+            if not normalized or normalized in seen:
+                continue
+            deduped.append(normalized)
+            seen.add(normalized)
+        return deduped
+
+    def _should_send_notification(self, session_id: str, action: str, player: str) -> bool:
+        now = time.monotonic()
+        expired_keys = [
+            key
+            for key, timestamp in self._recent_notifications.items()
+            if now - timestamp > _NOTIFY_DEDUP_WINDOW_SECONDS
+        ]
+        for key in expired_keys:
+            self._recent_notifications.pop(key, None)
+
+        key = (session_id, action, player)
+        if key in self._recent_notifications:
+            return False
+        self._recent_notifications[key] = now
+        return True
+
+    async def _send_to_groups(self, message: str, action: str = "message", player: str = ""):
+        for normalized in self._deduped_session_ids():
+            if not self._should_send_notification(normalized, action, player):
+                logger.debug(
+                    "[TShock Bridge] Duplicate notification skipped: %s/%s/%s",
+                    normalized,
+                    action,
+                    player,
+                )
                 continue
             try:
                 await self.context.send_message(
@@ -396,14 +436,18 @@ class Main(Star):
             await self._send_to_groups(
                 f"[上线] {name} 加入了服务器\n"
                 f"在线: {len(current_players)} 人\n"
-                f"{self._format_players(current_players)}"
+                f"{self._format_players(current_players)}",
+                action="join",
+                player=name,
             )
 
         for name in sorted(left):
             await self._send_to_groups(
                 f"[下线] {name} 离开了服务器\n"
                 f"在线: {len(current_players)} 人\n"
-                f"{self._format_players(current_players)}"
+                f"{self._format_players(current_players)}",
+                action="leave",
+                player=name,
             )
 
         self.last_players = current_players

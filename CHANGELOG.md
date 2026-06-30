@@ -2,6 +2,12 @@
 
 本项目基于 [Reisenbug/AstrBot_Plugin_Terraria_Server_Manager](https://github.com/Reisenbug/AstrBot_Plugin_Terraria_Server_Manager) 改造。
 
+## 0.3.2
+
+- 对 `session_ids` 自动去重，避免同一个群或会话被配置多次时重复推送。
+- 新增上下线通知 10 秒防抖，避免同一玩家同一事件短时间重复刷屏。
+- `/tsdebug` 配置摘要新增 session 配置数量和去重后的数量。
+
 ## 0.3.1
 
 - 新增 `token_login_cooldown` 配置项，可调整账号密码申请 token 失败后的重试冷却秒数。
